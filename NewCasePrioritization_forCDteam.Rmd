@@ -184,8 +184,7 @@ time <- str_split(Sys.time(), " ")
 time <- str_split(time[[1]][2], ":")[[1]][1]
 date <- as.character(Sys.Date())
 
-#write new output file for next run
-write.xlsx(diff_new, file = paste0(location, "/","New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
+
 #file to be move in box
 write.xlsx(diff_new, file = paste0(location, date, "_time_",time,"_New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
 #Archive input files
