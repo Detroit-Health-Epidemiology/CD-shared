@@ -1,0 +1,209 @@
+## Katerina Stylianou DHD 2/2021 ##
+____________________________________________________________________________________
+What does this script need?
+____________________________________________________________________________________
+
+This script takes in:
+1- MDSS new search for confirmed + probable NEW Covid-19 cases in Detroit (NewCases)
+2- Pending cases for investigation
+3- Facilities masterlist (facility name, address, physician affiliations, facility type)
+
+
+____________________________________________________________________________________
+What does this script do?
+____________________________________________________________________________________
+It will load MDSS data, flag cases for certain  facilities, and prioritize cases based on case status and referal date
+1- Reads new cases in MDSS for Detroit City from the past 3/4 days
+2- Reads pending investigation cases from smartsheet
+3- Dedub new cases
+4- Flag cases based on NH,LTCF, Shelter, DDC, and inpatient
+5- Reorder cases based on prioritization
+6- explort excel file for investigators and archive
+
+
+
+____________________________________________________________________________________
+In this  first section we a) load the packaged from R needed to run the analysis, b) set up the folder location for files to be read and written in Box, c) read all files needed for this analysis, and d) check MDSS file for errors
+``` {r packages & input file}
+
+#loading of packages
+library(tidyverse)
+library(summarytools)
+library(openxlsx)
+library(anytime)
+library(rgdal)
+library(gtools)
+library(doParallel)
+
+
+
+
+#set up folder location 
+location <- "C:/Case Pulls"
+
+#Read files needed for the analysis
+#File from MDSS
+NewInvestigations <- read.csv(paste0(location, "/", "NewCases.csv"),  sep = ',')
+#File from smarthseet
+OldInvestigations <- readWorkbook(paste0(location, "/", "x_Investigation IDs Input.xlsx"), sheet =  "x_Investigation IDs Input", na.strings = c('NA', '#N/A', '') )
+#File for facilities
+#LTCF and NH mastelist
+Facilities <- readWorkbook(paste0(location, "/", "Facilities masterlist.xlsx"), sheet =  "Sheet 1", 
+                                  na.strings = c('NA', '#N/A', '') )
+
+
+
+
+#Check if there are errors in the MDSS download. If there are any, the code will stop and a warning message will appear
+if(isTRUE(any(NewInvestigations == "An error occurred while exporting this case."))){stop("WARNING! There are errors in the downloaded file.")}
+#check if MDSS file was downloaded with lab data
+if(!"Lab_1_Spec_Collection_Date" %in% colnames(NewInvestigations)){stop("WARNING! There MDSS download is missing labs.Please download the file again with lab data")}
+
+
+```
+
+In this section we clean up the MDSS download, identify the new cases that need to be added in the smartsheet, and update the referral date based on the lab collection date
+
+```{r cleanup}
+
+# Define list of addresses that have been identified as not informative for case investigation
+exclusion_Addresses <- "(^100 MACK|^400 MACK|PO Box|P O BOX|P.O. BOX|Unknown|homeless|^2799 (W|WEST)*.*GRAND B|^22101 MOROSS R|^4646 JOHN R R|1 ford pl|one energy pl|1 energy pl|^5635 (W|WEST)*.*FORT S|^2 WOODWARD|^500 GRISWOLD S|^4201 (ST|SAINT) ANTOINE S|^4646 JOHN R S|^570 CLINTON S|^3456 (W|WEST)*.*VERNOR H|^6071 (W|WEST)*.*OUTER DR|^16238 (W|WEST)*.*WARREN A|^600 (E|EAST)*.*LAFAYETTE B|^23 (E|EAST)*.* ADAMS AVE|^4880 LAWNDALE S|^17600 RYAN R)"
+
+#filter for cases in Detroit city jurisdiction
+NewInvestigations <- NewInvestigations %>% filter(Investigation_Addr_Jurisdicti == "Detroit City")
+
+#modify the investigationID field from smartsheet to match the one from MDSS
+OldInvestigations$Investigation.ID <- as.numeric(OldInvestigations$Investigation.ID)
+OldInvestigations <- OldInvestigations %>% rename(Investigation_ID = Investigation.ID)
+
+
+#compare the MDSS download with the cases in the smartheet and Identify the NEW cases to be added
+#pick new cases
+diff <- anti_join(NewInvestigations, OldInvestigations, by = "Investigation_ID")
+
+
+#Create a new field to correctly document the case referral date based on the lab collection date
+diff$Referral_Date <- anydate(diff$Referral_Date)
+diff$Lab_1_Spec_Collection_Date <- anydate(diff$Lab_1_Spec_Collection_Date)
+diff$Referral_Date_new <- format(diff$Referral_Date, "%m/%d")
+diff$Project_Description <- paste0(diff$Referral_Date_new," ", diff$Case_Status)
+
+#Define new field for corrected patient addresses. If the patient address is included in the exclusion list then the address is replaced by "NONE"
+diff <- diff %>% 
+    mutate(
+     Corrected_addresses = case_when(
+    grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)|is.na(Investigation_Addr_Street)|Investigation_Addr_Street=="" ~ "NONE",
+    TRUE ~ Investigation_Addr_Street)   )
+
+#select the fields from MDSS that are needed for the analysis
+diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Project_Description,
+                        Referral_Date, Investigation_Addr_Street, Physician_Affiliation,
+                        Lab_1_Spec_Collection_Date,Referral_Date_new, Investigation_Addr_City)
+
+
+```
+
+Flag cases for different facilities
+
+```{r case flagginng}
+
+#Separate facility flagging by address and physician affiliation
+FacilityByAddress <- Facilities %>% select(starts_with("Facility"))
+FacilityByAffiliation <- Facilities %>% select(starts_with("Physician"))
+
+
+#rename the facility address to the same field name as in Patient address in MDSS
+FacilityByAddress <- FacilityByAddress  %>% rename( Investigation_Addr_Street = Facility_address)
+
+#match patient's address with facility address and physician affiliation
+diff <- merge(diff, FacilityByAddress, by = "Investigation_Addr_Street", all.x = TRUE)
+diff <- merge(diff, FacilityByAffiliation, by = "Physician_Affiliation", all.x = TRUE)
+
+#replace investigation address when case is flagged for a facility
+diff$Index_Address <- !is.na(diff$Facility_type) 
+diff$Index_PA <- !is.na(diff$Physician_type) 
+diff$Investigation_Addr_Street[diff$Index_Address] <- diff$Facility_name[diff$Index_Address]
+diff$Investigation_Addr_Street[diff$Index_PA] <- diff$Physician_Affiliation[diff$Index_PA]
+
+
+#flag inpatient cases and cases affiliated with any facility
+diff <- diff %>% mutate(
+  Flag_Inpatient = case_when(
+     Case_Disposition == "I" ~ 1,
+     TRUE ~ 0),
+  Flag_Facilities = case_when(
+    Index_Address == 1 | Index_PA == 1 ~ 1,
+    TRUE ~0 ))
+
+
+#Create ordering anf flagging columns
+diff <- diff %>% mutate(
+  orderIndex = case_when(Flag_Inpatient == 1 ~ 1,
+                   Flag_Facilities == 1 ~ 2,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" ~ 3,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" ~ 4,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" ~ 5,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" ~ 6,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" ~ 7,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" ~ 8,
+                   TRUE ~ 9),
+  Prioritization =  case_when(Flag_Inpatient == 1 ~ "Inpatient",
+              Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
+              Flag_Facilities == 1 & (Facility_type == "LTCF" | Physician_type == "LTCF") ~ "LTCF",
+              Flag_Facilities == 1 &  Physician_type == "DDC" ~ "DDC",
+              Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
+              TRUE ~ ""))
+
+
+
+```
+
+Put togther the output file and write it in Box and server (epi team)
+
+```{r prepare and save output file}
+
+#reorder data based on prioritization: 
+diff <- diff[order(diff$orderIndex,diff$Prioritization,-as.numeric(diff$Referral_Date)),]
+
+#Insert empty column 
+diff$Created <- ""
+
+#Select the final list of fields for the output 
+diff_new <- diff %>% select(Case_Status, Investigation_ID, Created, Project_Description, Referral_Date,
+                            Investigation_Addr_Street, Physician_Affiliation,
+                            Lab_1_Spec_Collection_Date, Prioritization, orderIndex, Referral_Date_new,
+                            Case_Disposition, Facility_name,Flag_Inpatient,Flag_Facilities)
+
+# Change the format of date fields to character. This helps how dates are written in excel and maintaining the fromat mm/dd/yyyy
+diff_new$Referral_Date <- as.character(diff_new$Referral_Date)
+diff_new$Lab_1_Spec_Collection_Date <- as.character(diff_new$Lab_1_Spec_Collection_Date)
+
+
+# Capture the current time and date
+time <- str_split(Sys.time(), " ")
+time <- str_split(time[[1]][2], ":")[[1]][1]
+date <- as.character(Sys.Date())
+
+#write new output file for next run
+write.xlsx(diff_new, file = paste0(location, "/","New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
+#file to be move in box
+write.xlsx(diff_new, file = paste0(location, date, "_time_",time,"_New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
+#Archive input files
+write.xlsx(diff_new, file = paste0(location, "/Archive/", date, "_time_",time,"_New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
