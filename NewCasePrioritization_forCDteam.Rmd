@@ -89,11 +89,10 @@ diff$Referral_Date_new <- format(diff$Referral_Date, "%m/%d")
 diff$Project_Description <- paste0(diff$Referral_Date_new," ", diff$Case_Status)
 
 #Define new field for corrected patient addresses. If the patient address is included in the exclusion list then the address is replaced by "NONE"
-diff <- diff %>% 
-    mutate(
-     Corrected_addresses = case_when(
-    grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)|is.na(Investigation_Addr_Street)|Investigation_Addr_Street=="" ~ "NONE",
-    TRUE ~ Investigation_Addr_Street)   )
+diff$Investigation_Addr_Street[diff$Investigation_Addr_Street == ""] <- "NONE"
+diff$Investigation_Addr_Street[is.na(diff$Investigation_Addr_Street)] <- "NONE"
+diff$Investigation_Addr_Street[exclusion_Addresses %in% diff$Investigation_Addr_Street] <- "NONE"
+
 
 #select the fields from MDSS that are needed for the analysis
 diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Project_Description,
@@ -110,6 +109,7 @@ Flag cases for different facilities
 #Separate facility flagging by address and physician affiliation
 FacilityByAddress <- Facilities %>% select(starts_with("Facility"))
 FacilityByAffiliation <- Facilities %>% select(starts_with("Physician"))
+FacilityByAffiliation <- na.omit(FacilityByAffiliation)
 
 
 #rename the facility address to the same field name as in Patient address in MDSS
@@ -184,8 +184,7 @@ time <- str_split(Sys.time(), " ")
 time <- str_split(time[[1]][2], ":")[[1]][1]
 date <- as.character(Sys.Date())
 
-OutFolder <- paste0("Archive", "/") #Name of folder for output to be written
-dir.create(paste0(location, "/", OutFolder))
+
 
 #file to be move in box
 write.xlsx(diff_new, file = paste0(location,date, "_time_",time,"_New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
