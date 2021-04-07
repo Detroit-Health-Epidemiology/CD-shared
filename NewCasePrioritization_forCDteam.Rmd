@@ -64,6 +64,7 @@ if(!"Lab_1_Spec_Collection_Date" %in% colnames(NewInvestigations)){stop("WARNING
 
 In this section we clean up the MDSS download, identify the new cases that need to be added in the smartsheet, and update the referral date based on the lab collection date
 
+
 ```{r cleanup}
 
 # Define list of addresses that have been identified as not informative for case investigation
@@ -89,22 +90,62 @@ diff$Referral_Date_new <- format(diff$Referral_Date, "%m/%d")
 diff$Project_Description <- paste0(diff$Referral_Date_new," ", diff$Case_Status)
 
 #Define new field for corrected patient addresses. If the patient address is included in the exclusion list then the address is replaced by "NONE"
-diff$Investigation_Addr_Street[diff$Investigation_Addr_Street == ""] <- "NONE"
-diff$Investigation_Addr_Street[is.na(diff$Investigation_Addr_Street)] <- "NONE"
-diff$Investigation_Addr_Street[exclusion_Addresses %in% diff$Investigation_Addr_Street] <- "NONE"
+diff <- diff %>% 
+    mutate(
+     Corrected_addresses = case_when(
+    grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)|is.na(Investigation_Addr_Street)|Investigation_Addr_Street=="" ~ "NONE",
+    TRUE ~ Investigation_Addr_Street)   )
+
+#select the fields from MDSS that are needed for the analysis (Jamie Bivins)
+diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Patient_Age, Patient_Age_Unit, Project_Description,
+                        Referral_Date, Investigation_Addr_Street,Investigation_Addr_Zip, Physician_Affiliation, Physician_Addr_Street, Lab_1_Test_Name,
+                        Lab_1_Spec_Collection_Date,Referral_Date_new, Investigation_Addr_City, Lab_1_Rslt_1_Comments)
 
 
-#select the fields from MDSS that are needed for the analysis
-diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Project_Description,
-                        Referral_Date, Investigation_Addr_Street, Physician_Affiliation,
-                        Lab_1_Spec_Collection_Date,Referral_Date_new, Investigation_Addr_City)
+```
+
+Due to the case surge, additional prioritization is needed. In this section we flag cases by age and zip
 
 
+```{r}
+diff$Patient_Age <- as.numeric(diff$Patient_Age)
+
+#flag by zip
+Flaggedzip <- c(48228, 48227, 48210, 48209)
+
+diff <- diff %>%
+    mutate(
+    Age_In_Years = case_when( # if age is in months, convert to years in new column
+      Patient_Age_Unit == "Months" | Patient_Age_Unit == "months" ~ round(Patient_Age/12, digits = 2),
+      Patient_Age_Unit == "Days" | Patient_Age_Unit == "days" ~ round(Patient_Age/365, digits = 2),
+      Patient_Age_Unit == "Years" | Patient_Age_Unit == "years" ~ Patient_Age),
+
+    Age_group = case_when( # Make age range categories
+      Age_In_Years <= 40  ~ "40 and younger",
+      Age_In_Years > 40  ~ "Older than 40",
+      TRUE ~ ""),
+
+   Flag_age = case_when( #flag when age group is not empty
+     Age_group == "40 and younger" ~ 1,
+      TRUE ~ 0))
+
+diff <- diff %>% mutate(
+Simple_Investigation_Zip = case_when(
+     !grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)&!is.na(Investigation_Addr_Street)&
+      Investigation_Addr_Street!="" ~ substr(Investigation_Addr_Zip, 1, 5),
+     grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)|is.na(Investigation_Addr_Street) ~ "NONE"),
+
+    Flag_zip = case_when( #flag when zip of interest
+       Simple_Investigation_Zip %in% Flaggedzip ~ 1,
+      TRUE ~ 0))
 ```
 
 Flag cases for different facilities
 
 ```{r case flagginng}
+
+#Flag for Binax
+diff$Flag_Binax <- as.integer(grepl("binax",paste0(diff$Lab_1_Test_Name,diff$Lab_1_Rslt_1_Comments),ignore.case = TRUE))
 
 #Separate facility flagging by address and physician affiliation
 FacilityByAddress <- Facilities %>% select(starts_with("Facility"))
@@ -115,15 +156,24 @@ FacilityByAffiliation <- na.omit(FacilityByAffiliation)
 #rename the facility address to the same field name as in Patient address in MDSS
 FacilityByAddress <- FacilityByAddress  %>% rename( Investigation_Addr_Street = Facility_address)
 
-#match patient's address with facility address and physician affiliation
-diff <- merge(diff, FacilityByAddress, by = "Investigation_Addr_Street", all.x = TRUE)
+#match patient's address with facility address, physician affiliation, and physician affiliation
+MatchedFacilityName1 <- FacilityByAddress$Facility_name[match(diff$Investigation_Addr_Street,FacilityByAddress$Investigation_Addr_Street)]
+MatchedFacilityName2 <- FacilityByAddress$Facility_name[match(diff$Physician_Addr_Street,FacilityByAddress$Investigation_Addr_Street)]
+MatchedFacilityName_Combined <- MatchedFacilityName1
+MatchedFacilityName_Combined[is.na(MatchedFacilityName_Combined)] <- MatchedFacilityName2[is.na(MatchedFacilityName_Combined)]
+diff$Facility_name <- MatchedFacilityName_Combined
+diff <- merge(diff, FacilityByAddress[,2:3], by = "Facility_name", all.x = TRUE)
 diff <- merge(diff, FacilityByAffiliation, by = "Physician_Affiliation", all.x = TRUE)
+
+
 
 #replace investigation address when case is flagged for a facility
 diff$Index_Address <- !is.na(diff$Facility_type) 
 diff$Index_PA <- !is.na(diff$Physician_type) 
 diff$Investigation_Addr_Street[diff$Index_Address] <- diff$Facility_name[diff$Index_Address]
 diff$Investigation_Addr_Street[diff$Index_PA] <- diff$Physician_Affiliation[diff$Index_PA]
+
+
 
 
 #flag inpatient cases and cases affiliated with any facility
@@ -135,23 +185,41 @@ diff <- diff %>% mutate(
     Index_Address == 1 | Index_PA == 1 ~ 1,
     TRUE ~0 ))
 
+#Create variable for number of flags for age and zips (Jamie Bivins +KS)
+diff$Flag_number <- diff$Flag_age + diff$Flag_zip
 
-#Create ordering anf flagging columns
+#Create ordering anf flagging columns (Jamie Bivins)
 diff <- diff %>% mutate(
   orderIndex = case_when(Flag_Inpatient == 1 ~ 1,
                    Flag_Facilities == 1 ~ 2,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" ~ 3,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" ~ 4,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" ~ 5,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" ~ 6,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" ~ 7,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" ~ 8,
-                   TRUE ~ 9),
+                   Flag_Binax == 1 ~ 3,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 4,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 5,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 6,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 7,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 8,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 9,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 10,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 11,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 12,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 13,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 14,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 15,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 16,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 17,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 18,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 19,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 20,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 21,
+                   TRUE ~ 22),
   Prioritization =  case_when(Flag_Inpatient == 1 ~ "Inpatient",
               Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
-              Flag_Facilities == 1 & (Facility_type == "LTCF" | Physician_type == "LTCF") ~ "LTCF",
               Flag_Facilities == 1 &  Physician_type == "DDC" ~ "DDC",
               Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
+              Flag_Facilities == 1 ~ "LTCF",
+              Flag_Binax == 1 ~ "Binax",
+              Flag_number == 2 ~ "Age and Zip",
+              Flag_number == 1 ~ "Age or Zip",
               TRUE ~ ""))
 
 
@@ -170,9 +238,10 @@ diff$Created <- ""
 
 #Select the final list of fields for the output 
 diff_new <- diff %>% select(Case_Status, Investigation_ID, Created, Project_Description, Referral_Date,
-                            Investigation_Addr_Street, Physician_Affiliation,
+                            Investigation_Addr_Street, Physician_Affiliation, Lab_1_Test_Name, 
                             Lab_1_Spec_Collection_Date, Prioritization, orderIndex, Referral_Date_new,
-                            Case_Disposition, Facility_name,Flag_Inpatient,Flag_Facilities)
+                            Case_Disposition, Lab_1_Rslt_1_Comments, Facility_name,  Physician_Addr_Street, 
+                            Flag_Inpatient,Flag_Facilities, Flag_age, Flag_zip, Flag_Binax)
 
 # Change the format of date fields to character. This helps how dates are written in excel and maintaining the fromat mm/dd/yyyy
 diff_new$Referral_Date <- as.character(diff_new$Referral_Date)
@@ -184,7 +253,11 @@ time <- str_split(Sys.time(), " ")
 time <- str_split(time[[1]][2], ":")[[1]][1]
 date <- as.character(Sys.Date())
 
+```
 
+Write output files
+
+```{r write outouts}
 
 #file to be move in box
 write.xlsx(diff_new, file = paste0(location,date, "_time_",time,"_New_Cases_for_investigation.xlsx"), sep="\t", row.names=FALSE)
