@@ -162,7 +162,8 @@ MatchedFacilityName2 <- FacilityByAddress$Facility_name[match(diff$Physician_Add
 MatchedFacilityName_Combined <- MatchedFacilityName1
 MatchedFacilityName_Combined[is.na(MatchedFacilityName_Combined)] <- MatchedFacilityName2[is.na(MatchedFacilityName_Combined)]
 diff$Facility_name <- MatchedFacilityName_Combined
-diff <- merge(diff, FacilityByAddress[,2:3], by = "Facility_name", all.x = TRUE)
+FacilityByAddress_Match <- unique(FacilityByAddress[,2:3])
+diff <- merge(diff, FacilityByAddress_Match, by = "Facility_name", all.x = TRUE)
 diff <- merge(diff, FacilityByAffiliation, by = "Physician_Affiliation", all.x = TRUE)
 
 
