@@ -104,41 +104,6 @@ diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Patient
 
 ```
 
-Due to the case surge, additional prioritization is needed. In this section we flag cases by age and zip
-
-
-```{r}
-diff$Patient_Age <- as.numeric(diff$Patient_Age)
-
-#flag by zip
-Flaggedzip <- c(48228, 48227, 48210, 48209)
-
-diff <- diff %>%
-    mutate(
-    Age_In_Years = case_when( # if age is in months, convert to years in new column
-      Patient_Age_Unit == "Months" | Patient_Age_Unit == "months" ~ round(Patient_Age/12, digits = 2),
-      Patient_Age_Unit == "Days" | Patient_Age_Unit == "days" ~ round(Patient_Age/365, digits = 2),
-      Patient_Age_Unit == "Years" | Patient_Age_Unit == "years" ~ Patient_Age),
-
-    Age_group = case_when( # Make age range categories
-      Age_In_Years <= 40  ~ "40 and younger",
-      Age_In_Years > 40  ~ "Older than 40",
-      TRUE ~ ""),
-
-   Flag_age = case_when( #flag when age group is not empty
-     Age_group == "40 and younger" ~ 1,
-      TRUE ~ 0))
-
-diff <- diff %>% mutate(
-Simple_Investigation_Zip = case_when(
-     !grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)&!is.na(Investigation_Addr_Street)&
-      Investigation_Addr_Street!="" ~ substr(Investigation_Addr_Zip, 1, 5),
-     grepl(exclusion_Addresses, Investigation_Addr_Street, ignore.case = TRUE)|is.na(Investigation_Addr_Street) ~ "NONE"),
-
-    Flag_zip = case_when( #flag when zip of interest
-       Simple_Investigation_Zip %in% Flaggedzip ~ 1,
-      TRUE ~ 0))
-```
 
 Flag cases for different facilities
 
@@ -186,41 +151,24 @@ diff <- diff %>% mutate(
     Index_Address == 1 | Index_PA == 1 ~ 1,
     TRUE ~0 ))
 
-#Create variable for number of flags for age and zips (Jamie Bivins +KS)
-diff$Flag_number <- diff$Flag_age + diff$Flag_zip
-
-#Create ordering anf flagging columns (Jamie Bivins)
+#Create ordering and flagging columns (Jamie Bivins)
 diff <- diff %>% mutate(
   orderIndex = case_when(Flag_Inpatient == 1 ~ 1,
                    Flag_Facilities == 1 ~ 2,
                    Flag_Binax == 1 ~ 3,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 4,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 5,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 6,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 7,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 2 ~ 8,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 2 ~ 9,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 10,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 11,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 12,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 13,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 1 ~ 14,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 1 ~ 15,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 16,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 17,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" & Flag_number == 0 ~ 18,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 19,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 20,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" & Flag_number == 0 ~ 21,
-                   TRUE ~ 22),
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" ~ 4,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" ~ 5,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" ~ 6,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" ~ 7,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" ~ 8,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" ~ 9,
+                   TRUE ~ 10),
   Prioritization =  case_when(Flag_Inpatient == 1 ~ "Inpatient",
               Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
               Flag_Facilities == 1 &  Physician_type == "DDC" ~ "DDC",
               Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
               Flag_Facilities == 1 ~ "LTCF",
               Flag_Binax == 1 ~ "Binax",
-              Flag_number == 2 ~ "Age and Zip",
-              Flag_number == 1 ~ "Age or Zip",
               TRUE ~ ""))
 
 
@@ -242,7 +190,7 @@ diff_new <- diff %>% select(Case_Status, Investigation_ID, Created, Project_Desc
                             Investigation_Addr_Street, Physician_Affiliation, Lab_1_Test_Name, 
                             Lab_1_Spec_Collection_Date, Prioritization, orderIndex, Referral_Date_new,
                             Case_Disposition, Lab_1_Rslt_1_Comments, Facility_name,  Physician_Addr_Street, 
-                            Flag_Inpatient,Flag_Facilities, Flag_age, Flag_zip, Flag_Binax)
+                            Flag_Inpatient,Flag_Facilities, Flag_Binax)
 
 # Change the format of date fields to character. This helps how dates are written in excel and maintaining the fromat mm/dd/yyyy
 diff_new$Referral_Date <- as.character(diff_new$Referral_Date)
