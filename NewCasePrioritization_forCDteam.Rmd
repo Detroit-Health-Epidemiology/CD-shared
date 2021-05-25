@@ -165,6 +165,7 @@ diff <- diff %>% mutate(
                    TRUE ~ 10),
   Prioritization =  case_when(Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
               Flag_Facilities == 1 &  Physician_type == "DDC/WCJF" ~ "DDC/WCJF",
+              Flag_Facilities == 1 &  Facility_type == "DDC/WCJF" ~ "DDC/WCJF",
               Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
               Flag_Facilities == 1 ~ "LTCF",
               Flag_Binax == 1 ~ "Binax",
