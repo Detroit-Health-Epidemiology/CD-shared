@@ -39,7 +39,7 @@ library(doParallel)
 
 
 #set up folder location 
-location <- "C:/Case Pulls/"
+location <- "C:/Users/bivinsj/Desktop/Case Pulls/"
 
 #Read files needed for the analysis
 #File from MDSS
@@ -104,10 +104,28 @@ diff <- diff %>% select(Case_Status, Case_Disposition, Investigation_ID, Patient
 
 ```
 
+Age group 2/4/2022
+```{r Flag for 65+}
+ diff <- diff %>%
+mutate(
+ Age_In_Years = case_when( # if age is in months, convert to years in new column
+    Patient_Age_Unit == "Months" | Patient_Age_Unit == "months" ~ as.numeric(round(Patient_Age/12, digits = 2)),
+     Patient_Age_Unit == "Days" | Patient_Age_Unit == "days" ~ as.numeric(round(Patient_Age/365, digits = 2)),
+     Patient_Age_Unit == "Years" | Patient_Age_Unit == "years" ~ as.numeric(Patient_Age)),
+
+     Age_group = case_when( # Make age range categories
+       Age_In_Years >= 65  ~ "65 and older",
+       TRUE ~ ""),
+ 
+    Flag_age = case_when( #flag when age group is not empty
+       Age_group == "65 and older" ~ 1,
+       TRUE ~ 0))
+```
 
 Flag cases for different facilities
 
-```{r case flagginng}
+```{r case flagginng JB 2/7}
+
 
 #Flag for Binax
 diff$Flag_Binax <- as.integer(grepl("binax",paste0(diff$Lab_1_Test_Name,diff$Lab_1_Rslt_1_Comments),ignore.case = TRUE))
@@ -151,28 +169,32 @@ diff <- diff %>% mutate(
     Index_Address == 1 | Index_PA == 1 ~ 1,
     TRUE ~0 ))
 
+#Create variable for number of flags for age and zips (Jamie Bivins +KS)
+#diff$Flag_number <- diff$Flag_age + diff$Flag_zip
+
 #Create ordering and flagging columns (Jamie Bivins)
 diff <- diff %>% mutate(
   orderIndex = case_when(Flag_Inpatient == 1 ~ 1,
                    Flag_Facilities == 1 ~ 2,
-                   Flag_Binax == 1 ~ 3,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" ~ 4,
-                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" ~ 5,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" ~ 6,
-                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" ~ 7,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" ~ 8,
-                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" ~ 9,
-                   TRUE ~ 10),
-  Prioritization =  case_when(Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
+                   Flag_age == 1 ~ 3,
+                   Flag_Binax == 1 ~ 4,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Confirmed" ~ 5,
+                   Referral_Date_new == format(Sys.Date()-1, "%m/%d") & Case_Status == "Probable" ~ 6,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Confirmed" ~ 7,
+                   Referral_Date_new == format(Sys.Date(), "%m/%d") & Case_Status == "Probable" ~ 8,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Confirmed" ~ 9,
+                   Referral_Date_new == format(Sys.Date()-2, "%m/%d") & Case_Status == "Probable" ~ 10,
+                   TRUE ~ 11),
+  Prioritization =  case_when(Flag_Inpatient == 1 ~ "Inpatient",
+                              Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
+              Flag_Inpatient == 1 & Flag_age == 1 ~ "Inpatient (65 and older)",
+                              Flag_age == 1 ~ "65 and older"
               Flag_Facilities == 1 &  Physician_type == "DDC/WCJF" ~ "DDC/WCJF",
               Flag_Facilities == 1 &  Facility_type == "DDC/WCJF" ~ "DDC/WCJF",
               Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
               Flag_Facilities == 1 ~ "LTCF",
               Flag_Binax == 1 ~ "Binax",
               TRUE ~ ""))
-
-
-
 ```
 
 Put togther the output file and write it in Box and server (epi team)
