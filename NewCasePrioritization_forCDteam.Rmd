@@ -39,7 +39,7 @@ library(doParallel)
 
 
 #set up folder location 
-location <- "C:/Users/bivinsj/Desktop/Case Pulls/"
+location <- "C:/Case Pulls/"
 
 #Read files needed for the analysis
 #File from MDSS
