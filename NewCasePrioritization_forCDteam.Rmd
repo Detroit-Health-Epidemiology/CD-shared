@@ -188,7 +188,7 @@ diff <- diff %>% mutate(
   Prioritization =  case_when(Flag_Inpatient == 1 ~ "Inpatient",
                               Flag_Facilities == 1 & (Facility_type == "NH" | Physician_type == "NH") ~ "NH",
               Flag_Inpatient == 1 & Flag_age == 1 ~ "Inpatient (65 and older)",
-                              Flag_age == 1 ~ "65 and older"
+                              Flag_age == 1 ~ "65 and older",
               Flag_Facilities == 1 &  Physician_type == "DDC/WCJF" ~ "DDC/WCJF",
               Flag_Facilities == 1 &  Facility_type == "DDC/WCJF" ~ "DDC/WCJF",
               Flag_Facilities == 1 &  Facility_type == "SHELTER" ~ "SHELTER",
